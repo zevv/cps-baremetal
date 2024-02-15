@@ -7,12 +7,11 @@ EHEX := $(NAME)-eeprom.ihx
 
 NSRCS += main.nim
 
-NIMFLAGS += --mm:arc
+NIMFLAGS += --gc:arc
 NIMFLAGS += --cpu:avr
 NIMFLAGS += --os:any
 NIMFLAGS += --opt:size
 NIMFLAGS += --exceptions:goto
-NIMFLAGS += --listCmd
 NIMFLAGS += --stacktrace:off
 
 NIMFLAGS += --passC:-DF_CPU=16000000UL

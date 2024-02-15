@@ -98,7 +98,9 @@ macro task*(n: untyped): untyped =
   n.addPragma nnkExprColonExpr.newTree(ident"cps", ident"Task")
   n 
 
-var tasks: array[8, Task] # I'd rather use a Set[] but these are too big
+# This is the pool of waiting tasks; ideally this would be a set
+# instead of a fixed size array, but the set type is too big
+var tasks: array[8, Task]
 var ticks: uint32 = 0 # Global time counter
 
 # Find a free slot and add a task to the pool
@@ -182,7 +184,6 @@ proc ticker(interval: uint32, msg: string) {.task.} =
     print "tick " & msg & "\n"
     sleep(interval)
 
-
 # This functions is a minimal line editor that will print
 # every line received on the uart
 
@@ -195,14 +196,15 @@ proc reader() {.task.} =
     case c
       of 10, 13:
         print "got line: " & line & "\n"
-        line = ""
+        line.setLen(0)
       of 7, 127:
         if line.len > 0:
           line.setLen(line.len - 1)
           print "\b \b"
       else:
         line.add(c.char)
-        uart_tx(c)
+    print("\r> ")
+    print(line)
 
 # Because blinkenligt is important
 
