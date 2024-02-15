@@ -18,6 +18,8 @@ void isr_uart_rx(uint8_t c);
 
 void init(void)
 {
+  // GPIO
+  DDRB = (1<<PB5);
   // Timer
   TCCR0A = (1<<WGM01) | (1<<WGM00);
   TCCR0B = (1<<CS11) | (1<<CS10);
@@ -53,6 +55,13 @@ void uart_tx_byte(uint8_t c)
   UCSR0B |= (1<<UDRIE0);
 }
 
+void set_led(uint8_t on)
+{
+  if(on)
+    PORTB |= (1<<PB5);
+  else
+    PORTB &= ~(1<<PB5);
+}
 
 """.}
 
@@ -61,6 +70,7 @@ proc strerror(_: cint): cstring {.exportc.} = ""
 proc sleep_mode() {.importc, nodecl.}
 proc init() {.importc, nodecl.}
 proc uart_tx_byte(c: uint8) {.importc, nodecl.}
+proc set_led(on: uint8) {.importc, nodecl.}
 proc sei() {.importc, nodecl.}
 
 
