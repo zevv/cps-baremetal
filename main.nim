@@ -11,50 +11,57 @@
 #include <avr/sleep.h>
 #include <avr/interrupt.h>
 
-void on_tick(void);
-void on_uart_rx(uint8_t c);
+uint8_t tx_byte = 0;
+
+void isr_timer(void);
+void isr_uart_rx(uint8_t c);
 
 void init(void)
 {
   // Timer
   TCCR0A = (1<<WGM01) | (1<<WGM00);
-  TCCR0B = (1<<CS12) | (1<<CS10);
+  TCCR0B = (1<<CS11) | (1<<CS10);
   TIMSK0 |= (1<<TOIE0);
-  // Uart
-  uint32_t div = 8;
+  // UART
+  uint32_t div = (16000000 / 9600) / 16 - 1;
   UBRR0H = (div >> 8);
   UBRR0L = (div & 0xff);                     
   UCSR0C = (1<<UCSZ01) | (1<<UCSZ00);
   UCSR0B = (1<<RXCIE0) | (1<<RXEN0) | (1<<TXEN0); 
-  // Interrupts
-  sei();
 }
 
 ISR(TIMER0_OVF_vect)
 {
-  on_tick();
+  isr_timer();
 }
 
 ISR(USART_RX_vect)
 {
-  on_uart_rx(UDR0);
+  isr_uart_rx(UDR0);
 }
 
-void uar_tx(uint8_t c) {
-  while (!(UCSR0A & (1 << UDRE0)));
-  UDR0 = c;
+ISR(USART_UDRE_vect)
+{
+  UDR0 = tx_byte;
+  UCSR0B &= ~(1 << UDRIE0);
+  isr_uart_udre();
 }
+
+void uart_tx_byte(uint8_t c)
+{
+  tx_byte = c;
+  UCSR0B |= (1<<UDRIE0);
+}
+
 
 """.}
 
-proc sleep_mode() {.importc: "sleep_mode", nodecl.}
-proc init() {.importc: "init", nodecl.}
-proc uart_tx(c: uint8) {.importc: "uar_tx", nodecl.}
 proc strerror(_: cint): cstring {.exportc.} = ""
-proc delay_ms(ms: cdouble) {.importc: "_delay_ms", nodecl.}
-proc echo(s: string) = 
-  for c in s:
-    uart_tx(c.uint8)
+
+proc sleep_mode() {.importc, nodecl.}
+proc init() {.importc, nodecl.}
+proc uart_tx_byte(c: uint8) {.importc, nodecl.}
+proc sei() {.importc, nodecl.}
 
 
 ######################################################################
@@ -62,101 +69,144 @@ proc echo(s: string) =
 ######################################################################
 
 import cps
-
-# Define our continuation task type, this holds an enum to indicate
-# what to wait for, and how long
+import macros
 
 type
-  Waitfor = enum Timer, Uart
-  C = ref object of Continuation
-    waitfor: Waitfor
-    t_when: uint32
 
-var ticks: uint32 = 0
-var tasks: seq[C]
-var rx_buf: uint8
+  EvType = enum Timer, UartRx, UartTx,
 
-# Create a new task and add it to the queue
-proc run(c: C) =
-  c.t_when = ticks
-  tasks.add(c)
+  Task = ref object of Continuation
+    case evtype: EvType
+      of Timer:
+        t_when: uint32
+      of UartRx:
+        data: uint8
+      else:
+        discard
 
-template spawn(f: untyped) =
-  run whelp f
+macro task*(n: untyped): untyped =
+  n.addPragma nnkExprColonExpr.newTree(ident"cps", ident"Task")
+  n 
 
-# Tick ISR handler: find tasks waitig for a timer and resume them
-proc on_tick() {.exportc.} =
-  for t in tasks.mitems:
-    if t.waitfor == Waitfor.Timer:
-      if ticks >= t.t_when:
-        discard trampoline(t)
-  inc ticks
+var tasks: array[8, Task] # I'd rather use a Set[] but these are too big
+var ticks: uint32 = 0 # Global time counter
 
-# Uart ISR handler: store the received byte and resume tasks waiting for it
-proc on_uart_rx(c: uint8) {.exportc.} =
-  rx_buf = c
-  for t in tasks.mitems:
-    if t.waitfor == Waitfor.Uart:
+# Find a free slot and add a task to the pool
+proc suspend(t: Task, evType: EvType) =
+  t.evType = evType
+  for i in 0..tasks.high:
+    if tasks[i] == nil:
+      tasks[i] = t
+      return
+
+# Find the given task in the pool; remove it and resume
+proc resume(t: Task) =
+  for i in 0..tasks.high:
+    if tasks[i] == t:
+      tasks[i] = nil
       discard trampoline(t)
 
+# Tick ISR handler: find tasks waiting for a timer and resume them
+proc isr_timer() {.exportc.} =
+  for t in tasks:
+    if t != nil and t.evtype == Timer and ticks >= t.t_when:
+      t.resume
+  inc ticks
+
+# UART rx ISR handler: store the received byte and resume tasks waiting for it
+proc isr_uart_rx(c: uint8) {.exportc.} =
+  for t in tasks:
+    if t != nil and t.evtype == UartRx:
+      t.data = c
+      t.resume
+
+# UART tx-register-empty ISR handler
+proc isr_uart_udre() {.exportc.} =
+  for t in tasks:
+    if t != nil and t.evtype == UartTx:
+      t.resume
+
+######################################################################
+# scheduler user facing API
+######################################################################
+
+# Create a new task and add start it
+template spawn(f: untyped) =
+  let t = whelp f
+  discard trampoline(t)
+
+# Wait for the given event type
+proc waitFor(t: Task, evType: EvType): Task {.cpsMagic.} =
+  suspend t, evType
+
 # Sleep until the next timer event
-proc sleep(c: C, duration: uint32): C {.cpsMagic.} =
-  c.waitfor = Waitfor.Timer
-  c.t_when = ticks + duration
+proc sleep(t: Task, duration: uint32): Task {.cpsMagic.} =
+  t.t_when = ticks + duration
+  suspend t, EvType.Timer
 
-# Sleep until the next uart event
-proc rx_wait(c: C): C {.cpsMagic.} =
-  c.waitfor = Waitfor.Uart
+# Wait for a uart RX event and return the last received value
+proc uart_rx_data(t: Task): uint8 {.cpsVoodoo} =
+  t.data
 
-template rx(): char =
-  rx_wait()
-  rx_buf.char
+template uart_rx(): uint8 =
+  waitFor EvType.UartRx
+  uart_rx_data()
+
+# Send a byte over the uart
+proc uart_tx(t: Task, c: uint8): Task {.cpsMagic.} =
+  suspend t, EvType.UartTx
+  uart_tx_byte(c)
+
+proc print(s: string) {.task.} = 
+  var i = 0
+  while i < s.len:
+    uart_tx(s[i].uint8)
+    inc i
 
 ######################################################################
 # End of scheduler: main example program
 ######################################################################
 
-
-# This function prints a message every now and then.
-
-proc printer(interval: uint32, msg: string) {.cps:C.} =
+proc printer(interval: uint32, msg: string) {.task.} =
   while true:
-    echo "tick " & msg & "\n"
+    print "tick " & msg & "\n"
     sleep(interval)
 
 
 # This functions is a minimal line editor that will print
 # every line received on the uart
 
-proc reader() {.cps:C.} =
+proc reader() {.task.} =
 
   var line = newString(32)
 
   while true:
-    let c = rx()
+    let c = uart_rx()
     case c
-    of '\n', '\r':
-      echo "got : " & line & "\n"
-      line = ""
-    of '\b', 127.char:
-      if line.len > 0:
-        line.setLen(line.len - 1)
-        echo "\b \b"
-    else:
-      line.add(c)
-      echo c
+      of 10, 13:
+        print "got line: " & line & "\n"
+        line = ""
+      of 7, 127:
+        if line.len > 0:
+          line.setLen(line.len - 1)
+          print "\b \b"
+      else:
+        line.add(c.char)
+        uart_tx(c)
 
 
 # Main code: intialize the hardware and spawn some tasks
 
 init()
-spawn printer(100, "one")
-spawn printer(150, "two")
+spawn printer(1000, "one")
+spawn printer(1500, "two")
 spawn reader()
 
 # The main code does literally nothing, only put the 
 # CPU to sleep. Any ISRs will wake it up and resume tasks
 # as needed
+
+sei()
 
 while true:
   sleep_mode()
