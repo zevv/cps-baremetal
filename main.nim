@@ -177,7 +177,7 @@ proc print(s: string) {.task.} =
 # End of scheduler: main example program
 ######################################################################
 
-proc printer(interval: uint32, msg: string) {.task.} =
+proc ticker(interval: uint32, msg: string) {.task.} =
   while true:
     print "tick " & msg & "\n"
     sleep(interval)
@@ -204,13 +204,22 @@ proc reader() {.task.} =
         line.add(c.char)
         uart_tx(c)
 
+# Because blinkenligt is important
+
+proc blinker() {.task.} =
+  while true:
+    set_led(1)
+    sleep(100)
+    set_led(0)
+    sleep(100)
 
 # Main code: intialize the hardware and spawn some tasks
 
 init()
-spawn printer(1000, "one")
-spawn printer(1500, "two")
+spawn ticker(1000, "one")
+spawn ticker(1500, "two")
 spawn reader()
+spawn blinker()
 
 # The main code does literally nothing, only put the 
 # CPU to sleep. Any ISRs will wake it up and resume tasks

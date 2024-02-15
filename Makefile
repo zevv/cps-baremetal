@@ -13,6 +13,7 @@ NIMFLAGS += --os:any
 NIMFLAGS += --opt:size
 NIMFLAGS += --exceptions:goto
 NIMFLAGS += --listCmd
+NIMFLAGS += --stacktrace:off
 
 NIMFLAGS += --passC:-DF_CPU=16000000UL
 NIMFLAGS += --passC:-mmcu=atmega328p
@@ -20,6 +21,7 @@ NIMFLAGS += --passC:-flto
 
 NIMFLAGS += --passL:-mmcu=atmega328p
 NIMFLAGS += --passL:-flto
+NIMFLAGS += --path:~/sandbox/prjs/cps
 
 NIMFLAGS += -d:danger
 NIMFLAGS += -d:noSignalHandler
