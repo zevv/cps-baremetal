@@ -5,7 +5,7 @@ BIN  = $(NAME).elf
 FHEX := $(NAME)-flash.ihx
 EHEX := $(NAME)-eeprom.ihx
 
-NSRCS += main.nim
+NSRCS += $(wildcard *.nim)
 
 NIMFLAGS += --gc:arc
 NIMFLAGS += --cpu:avr
@@ -31,7 +31,7 @@ ADFLAGS += -p m328p -c avrispv2 -P usb
 
 
 $(BIN): $(NSRCS)
-	nim c -f $(NIMFLAGS) --out:$(BIN) $(NSRCS)
+	nim c -f $(NIMFLAGS) --out:$(BIN) main.nim
 
 $(FHEX) $(EHEX): $(BIN)
 	objcopy -j .text -j .data -O ihex $(BIN) $(FHEX)
